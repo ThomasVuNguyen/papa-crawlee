@@ -68,6 +68,7 @@ async function fetchZapierApps(limit = 100, maxPages = 5): Promise<any[]> {
 app.get('/zapier', async (req, res) => {
     const limit = Math.min(parseInt((req.query.limit as string) || '100', 10), 100);
     const pages = Math.min(parseInt((req.query.pages as string) || '2', 10), 101);
+    const simple = req.query.simple === '1' || req.query.simple === 'true';
     if (pages === 101) {
         res.setHeader('Cache-Control', 'public, max-age=3600');
         res.setHeader('Content-Type', 'application/json');
@@ -75,9 +76,32 @@ app.get('/zapier', async (req, res) => {
     try {
         const start = Date.now();
         const apps = await fetchZapierApps(limit, pages);
-        res.json({ count: apps.length, total: 10014, limit, pages, durationMs: Date.now() - start, cached: !!zapierCache && zapierCache.key === `${limit}:${pages}`, apps });
+        const out = simple ? apps.map((a: any) => ({ name: a.name, functionality: a.description, scope: a.categories, url: a.url })) : apps;
+        res.json({ count: out.length, total: 10014, limit, pages, durationMs: Date.now() - start, cached: !!zapierCache && zapierCache.key === `${limit}:${pages}`, simple, apps: out });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/zapier-simple', async (_req, res) => {
+    try {
+        const apps = await fetchZapierApps(100, 101);
+        const simple = apps.map((a: any) => ({ name: a.name, functionality: a.description, scope: a.categories, url: a.url }));
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.json({ count: simple.length, apps: simple });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/zapier-names', async (_req, res) => {
+    try {
+        const apps = await fetchZapierApps(100, 101);
+        res.setHeader('Content-Type', 'text/plain');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.send(apps.map((a: any) => a.name).join('\n'));
+    } catch (e: any) {
+        res.status(500).send(String(e.message));
     }
 });
 
