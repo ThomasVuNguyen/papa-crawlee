@@ -23,43 +23,59 @@ app.get('/', (_req, res) => {
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
-// Zapier: fetch full app directory via public API https://zapier.com/api/v4/apps
+// Zapier: fetch full app directory via public API https://zapier.com/api/v4/apps — parallel + cached
+let zapierCache: { key: string; data: any[]; ts: number } | null = null;
+const ZAPIER_CACHE_MS = 60 * 60 * 1000;
 async function fetchZapierApps(limit = 100, maxPages = 5): Promise<any[]> {
-    const all: any[] = [];
-    let offset = 0;
-    let total = Infinity;
-    for (let page = 0; page < maxPages && offset < total; page++) {
-        const resp = await fetch(`https://zapier.com/api/v4/apps?limit=${limit}&offset=${offset}`, {
-            headers: { 'User-Agent': 'papa-crawlee/1.0', Accept: 'application/json' },
-        });
-        if (!resp.ok) throw new Error(`Zapier API ${resp.status}`);
-        const data: any = await resp.json();
-        total = data.count;
-        const results = data.results || [];
-        for (const r of results) {
-            all.push({
-                id: r.id,
-                name: r.name,
-                slug: r.slug,
-                description: r.description,
-                url: `https://zapier.com${r.app_profile_url}`,
-                categories: (r.categories || []).map((c: any) => c.title),
-                popularity: r.popularity,
-            });
-        }
-        if (!data.next) break;
-        offset += limit;
+    const key = `${limit}:${maxPages}`;
+    if (zapierCache && zapierCache.key === key && Date.now() - zapierCache.ts < ZAPIER_CACHE_MS) {
+        return zapierCache.data;
     }
+    // first page to get total, then parallel rest
+    const firstResp = await fetch(`https://zapier.com/api/v4/apps?limit=${limit}&offset=0`, {
+        headers: { 'User-Agent': 'papa-crawlee/1.0', Accept: 'application/json' },
+    });
+    if (!firstResp.ok) throw new Error(`Zapier API ${firstResp.status}`);
+    const firstData: any = await firstResp.json();
+    const total = firstData.count;
+    const pages = Math.min(maxPages, Math.ceil(total / limit));
+    const all: any[] = [];
+    const push = (results: any[]) => {
+        for (const r of results) all.push({ id: r.id, name: r.name, slug: r.slug, description: r.description, url: `https://zapier.com${r.app_profile_url}`, categories: (r.categories || []).map((c: any) => c.title), popularity: r.popularity });
+    };
+    push(firstData.results || []);
+    if (pages > 1) {
+        const offsets = Array.from({ length: pages - 1 }, (_, i) => (i + 1) * limit);
+        const concurrency = 10;
+        for (let i = 0; i < offsets.length; i += concurrency) {
+            const batch = offsets.slice(i, i + concurrency);
+            const results = await Promise.all(
+                batch.map(async (off) => {
+                    const resp = await fetch(`https://zapier.com/api/v4/apps?limit=${limit}&offset=${off}`, { headers: { 'User-Agent': 'papa-crawlee/1.0', Accept: 'application/json' } });
+                    if (!resp.ok) throw new Error(`Zapier API ${resp.status} at offset ${off}`);
+                    const data: any = await resp.json();
+                    return data.results || [];
+                }),
+            );
+            for (const r of results) push(r);
+        }
+    }
+    all.sort((a, b) => a.popularity - b.popularity);
+    if (maxPages === 101) zapierCache = { key, data: all, ts: Date.now() }; // cache full dump only
     return all;
 }
 
 app.get('/zapier', async (req, res) => {
     const limit = Math.min(parseInt((req.query.limit as string) || '100', 10), 100);
-    const pages = Math.min(parseInt((req.query.pages as string) || '2', 10), 101); // 101*100 = 10k
+    const pages = Math.min(parseInt((req.query.pages as string) || '2', 10), 101);
+    if (pages === 101) {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.setHeader('Content-Type', 'application/json');
+    }
     try {
         const start = Date.now();
         const apps = await fetchZapierApps(limit, pages);
-        res.json({ count: apps.length, total: 10014, limit, pages, durationMs: Date.now() - start, apps });
+        res.json({ count: apps.length, total: 10014, limit, pages, durationMs: Date.now() - start, cached: !!zapierCache && zapierCache.key === `${limit}:${pages}`, apps });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
