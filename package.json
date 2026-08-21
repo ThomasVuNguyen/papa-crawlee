@@ -1,0 +1,21 @@
+{
+  "name": "papa-crawlee-standalone",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Papa - Crawlee playground for apify.beenex.org",
+  "dependencies": {
+    "crawlee": "^3.13.2",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "@types/express": "^5.0.0",
+    "tsx": "^4.19.0"
+  },
+  "scripts": {
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "build": "tsc"
+  }
+}
